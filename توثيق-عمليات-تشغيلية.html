@@ -920,7 +920,7 @@ function go(sc) {
   document.querySelectorAll('.nib')[NMAP[sc]]?.classList.add('on');
   document.getElementById('screens').scrollTop = 0;
   if (sc==='rec')  renderRecords();
-  if (sc==='form') autoGPS();
+  if (sc==='form') { autoGPS(); populateSelects(); } // ← يحدّث القوائم دائماً
   if (sc==='set') {
     if (isAdminSession()) {
       document.getElementById('pinModal').style.display   = 'none';
@@ -1284,21 +1284,30 @@ function addRef(key, inputId, ic) {
   if (!name) { toast('أدخل الاسم أولاً','er'); return; }
   if (REF[key].includes(name)) { toast('الاسم موجود بالفعل','er'); return; }
 
-  const onSuccess = (ref) => {
-    REF = ref || REF;
-    if (!REF[key].includes(name)) REF[key].push(name);
-    saveRef(REF);
-    populateSelects(); renderRefLists();
-    $(inputId).value='';
-    toast('✅ تمت الإضافة','ok');
-  };
+  // ── تحديث فوري بدون انتظار الخادم ──
+  REF[key].push(name);
+  saveRef(REF);
+  populateSelects();
+  renderRefLists();
+  $(inputId).value = '';
+  toast('✅ تمت الإضافة','ok');
 
+  // ── حفظ في Sheets في الخلفية (GAS فقط) ──
   if (GAS) {
+    const type = key==='ops'?'مشغل':key==='divs'?'دائرة':'مهمة';
     google.script.run
-      .withSuccessHandler(r => { if(r.ok){ CacheService&&CacheService.getScriptCache&&CacheService.getScriptCache().remove('ref'); onSuccess(r.ref); } else toast('❌ '+r.error,'er'); })
-      .withFailureHandler(()=>{ onSuccess(null); toast('⚠️ حُفظ محلياً','er'); })
-      .addRefItem(key==='ops'?'مشغل':key==='divs'?'دائرة':'مهمة', name);
-  } else { onSuccess(null); }
+      .withSuccessHandler(r => {
+        if (r && r.ok && r.ref) {
+          REF = r.ref;
+          saveRef(REF);
+          cacheRef(r.ref);
+          populateSelects();
+          renderRefLists();
+        }
+      })
+      .withFailureHandler(() => { /* محفوظ محلياً */ })
+      .addRefItem(type, name);
+  }
 }
 
 function renderRefLists() {
@@ -1355,23 +1364,31 @@ function importBulk(refKey, taId, cntId) {
   const items=($(taId)?.value||'').split('\n').map(n=>n.trim()).filter(n=>n.length>1);
   if(!items.length){ toast('لا توجد بيانات صالحة','er'); return; }
 
-  const type = refKey==='ops'?'مشغل':refKey==='divs'?'دائرة':'مهمة';
+  // ── تحديث فوري ──
+  let added=0, skipped=0;
+  items.forEach(v=>{
+    if(!REF[refKey].includes(v)){ REF[refKey].push(v); added++; }
+    else skipped++;
+  });
+  saveRef(REF);
+  populateSelects();
+  renderRefLists();
+  $(taId).value=''; $(cntId).textContent='';
+  toast(skipped?`✅ أُضيف ${added} (${skipped} موجود)`:`✅ تم إضافة ${added} بنجاح`,'ok');
 
-  const onSuccess = (ref, added, skipped) => {
-    if (ref) REF = ref;
-    else { items.forEach(v=>{ if(!REF[refKey].includes(v)) REF[refKey].push(v); }); }
-    saveRef(REF); populateSelects(); renderRefLists();
-    $(taId).value=''; $(cntId).textContent='';
-    toast(skipped?`✓ أُضيف ${added} (${skipped} موجود مسبقاً)`:`✓ تم إضافة ${added} بنجاح`,'ok');
-  };
-
+  // ── حفظ في Sheets في الخلفية (GAS فقط) ──
   if (GAS) {
-    load('جارٍ إضافة البيانات...');
+    const type = refKey==='ops'?'مشغل':refKey==='divs'?'دائرة':'مهمة';
     google.script.run
-      .withSuccessHandler(r=>{ hide(); if(r.ok) onSuccess(r.ref,r.added,r.skipped); else toast('❌ '+r.error,'er'); })
-      .withFailureHandler(()=>{ hide(); onSuccess(null, items.length, 0); toast('⚠️ حُفظ محلياً','er'); })
+      .withSuccessHandler(r => {
+        if (r && r.ok && r.ref) {
+          REF = r.ref; saveRef(REF); cacheRef(r.ref);
+          populateSelects(); renderRefLists();
+        }
+      })
+      .withFailureHandler(() => {})
       .addRefItems(type, items);
-  } else { onSuccess(null, items.length, 0); }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
